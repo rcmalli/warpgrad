@@ -467,7 +467,8 @@ class Warp(Parameters):
 
     def clear(self):
         """Clears parameter trajectory buffer."""
-        self.buffer.clear()
+        if self.buffer is not None:
+            self.buffer.clear()
 
     def collect(self):
         """Switch on task parameter collection in buffer."""
