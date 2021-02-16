@@ -22,8 +22,46 @@ from .utils import (step, approx_step, unfreeze, freeze,
                     state_dict_to_par_list)
 
 
-class DualUpdater:
+class SimpleUpdater:
+    """
+    """
 
+    def __init__(self, criterion, init_objective=0,
+                 epochs=1, bsz=1, norm=True, approx=False):
+        """Initialize an dummy updater.
+
+        Arguments:
+            criterion (function): task loss criterion.
+            init_objective (int): type of objective for initialization
+                (optional).
+            epochs (int): number of times to iterate over buffer (default=1).
+            bsz (int): task parameter batch size between updates (default=1).
+            norm (bool): use the norm in the Leap objective (d1)
+                (default=True).
+            approx (bool): use approximate (Hessian-free) meta-objective.
+        """
+        self.init_objective = init_objective
+        self.criterion = criterion
+        self.epochs = epochs
+        self.approx = approx
+        self.norm = norm
+        self.bsz = bsz
+
+    def backward(self, model, step_fn, **opt_kwargs):
+        """It does nothing for now.
+
+        Arguments:
+            model (Warp): warped model to backprop through.
+            step_fn (function): step function for the meta gradient.
+            **opt_kwargs (kwargs): optional arguments to inner optimizer.
+        """
+
+        # init_objective = INIT_OBJECTIVES[self.init_objective]
+        # init_objective(model.named_init_parameters(suffix=None),
+        #                params, self.norm, self.bsz, step_fn)
+
+
+class DualUpdater:
     """Implements the WarpGrad meta-objective.
 
     This updater applies the WarpGrad meta-objective to warp-parameters and
@@ -73,9 +111,10 @@ class DualUpdater:
         warp_objective(model, self.criterion, params, optimizer_buffers, data,
                        step_fn, opt_kwargs, self.epochs, self.bsz, self.approx)
 
-        init_objective= INIT_OBJECTIVES[self.init_objective]
+        init_objective = INIT_OBJECTIVES[self.init_objective]
         init_objective(model.named_init_parameters(suffix=None),
                        params, self.norm, self.bsz, step_fn)
+
 
 def warp_on_same_loss(model, criterion, trj, brj, tds, step_fn,
                       opt_kwargs, epochs, bsz, approx):
@@ -124,7 +163,7 @@ def warp_on_same_loss(model, criterion, trj, brj, tds, step_fn,
 
         if bsz > 0:
             for i in range(0, len(datapoints), bsz):
-                _step(datapoints[i:i+bsz])
+                _step(datapoints[i:i + bsz])
         else:
             _step(datapoints)
 
@@ -147,7 +186,7 @@ def simplified_leap(named_init, trj, norm, bsz, step_fn):
             joblib.delayed(line_seg_len)(
                 trj[t][i], trj[t][i + 1], par_names, norm, device)
             for t in trj
-            for i in range(0, len(trj[t])-1)
+            for i in range(0, len(trj[t]) - 1)
         )
 
     for i, a in zip(init, zip(*adds)):
