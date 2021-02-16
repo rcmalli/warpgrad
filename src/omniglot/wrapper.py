@@ -13,10 +13,11 @@ from leap import Leap
 from leap.utils import clone_state_dict
 
 from utils import Res, AggRes
+from warpgrad import SGD
+from warpgrad.utils import step, backward, unfreeze, freeze
 
 
 class BaseWrapper(object):
-
     """Generic training wrapper.
 
     Arguments:
@@ -123,7 +124,7 @@ class BaseWrapper(object):
             if not train:
                 continue
 
-            final = (n+1) == N
+            final = (n + 1) == N
             loss.backward()
 
             if meta_train:
@@ -139,8 +140,182 @@ class BaseWrapper(object):
         return res
 
 
-class WarpGradWrapper(BaseWrapper):
+class WarpGradOnlineWrapper(BaseWrapper):
+    """Wrapper around WarpGrad meta-learners using online learning algorithm 1.
 
+    Arguments:
+        model (nn.Module): classifier.
+        optimizer_cls: optimizer class.
+        meta_optimizer_cls: meta optimizer class.
+        optimizer_kwargs (dict): kwargs to pass to optimizer upon construction.
+        meta_optimizer_kwargs (dict): kwargs to pass to meta optimizer upon
+            construction.
+        meta_kwargs (dict): kwargs to pass to meta-learner upon construction.
+        criterion (func): loss criterion to use.
+    """
+
+    def __init__(self,
+                 model,
+                 optimizer_cls,
+                 meta_optimizer_cls,
+                 optimizer_kwargs,
+                 meta_optimizer_kwargs,
+                 meta_kwargs,
+                 criterion):
+
+        optimizer_parameters = warpgrad.OptimizerParameters(
+            trainable=meta_kwargs.pop('learn_opt', False),
+            default_lr=optimizer_kwargs['lr'],
+            default_momentum=optimizer_kwargs['momentum']
+            if 'momentum' in optimizer_kwargs else 0.)
+
+        # For now it is a dummy updater does nothing in backward call.
+        updater = warpgrad.SimpleUpdater(criterion, **meta_kwargs)
+
+        # we don't need replay buffer for algorithm1
+        model = warpgrad.Warp(model=model,
+                              adapt_modules=list(model.adapt_modules()),
+                              warp_modules=list(model.warp_modules()),
+                              updater=updater,
+                              buffer=None,
+                              optimizer_parameters=optimizer_parameters)
+
+        super(WarpGradOnlineWrapper, self).__init__(criterion,
+                                                    model,
+                                                    optimizer_cls,
+                                                    optimizer_kwargs)
+
+        self.meta_optimizer_cls = optim.SGD \
+            if meta_optimizer_cls.lower() == 'sgd' else optim.Adam
+        lra = meta_optimizer_kwargs.pop(
+            'lr_adapt', meta_optimizer_kwargs['lr'])
+        lri = meta_optimizer_kwargs.pop(
+            'lr_init', meta_optimizer_kwargs['lr'])
+        lrl = meta_optimizer_kwargs.pop(
+            'lr_lr', meta_optimizer_kwargs['lr'])
+        self.meta_optimizer = self.meta_optimizer_cls(
+            [{'params': self.model.init_parameters(), 'lr': lri},
+             {'params': self.model.warp_parameters(), 'lr': lra},
+             {'params': self.model.optimizer_parameters(), 'lr': lrl}],
+            **meta_optimizer_kwargs)
+
+        # This is the meta loss that we are going to accumulate.
+        self.meta_loss = 0
+
+    def _partial_meta_update(self, loss, final):
+        pass
+
+    def _final_meta_update(self):
+
+        def step_fn():
+            self.meta_optimizer.step()
+            self.meta_optimizer.zero_grad()
+
+        self.model.backward(step_fn, **self.optimizer_kwargs)
+
+    def run_tasks(self, tasks, meta_train):
+        """Train on a mini-batch tasks and evaluate test performance.
+
+        Arguments:
+            tasks (list, torch.utils.data.DataLoader): list of task-specific
+                dataloaders.
+            meta_train (bool): whether current run in during meta-training.
+        """
+        results = []
+        self.meta_loss = 0
+        for task in tasks:
+            task.dataset.train()
+            trainres = self.run_task(task, train=True, meta_train=meta_train)
+            task.dataset.eval()
+            valres = self.run_task(task, train=False, meta_train=False)
+            results.append((trainres, valres))
+        ##
+        results = AggRes(results)
+
+        # Meta gradient step
+        if meta_train:
+            # at the end of collection for K steps N tasks we do the backward
+            # pass.
+            backward(self.meta_loss, self.model.meta_parameters(
+                include_init=False))
+            self._final_meta_update()
+
+        return results
+
+    def run_task(self, task, train, meta_train):
+        """Run model on a given task, first adapting and then evaluating"""
+        self.model.no_collect()
+
+        optimizer = None
+        if train:
+            # TODO: Discuss implementation and correct it.
+            # This line breakes gradient computation for now
+            # meta_layers required_grad properties are set to False if
+            # we call init_adaptation
+            # self.model.init_adaptation()
+            self.model.train()
+
+            optimizer = self.optimizer_cls(
+                self.model.optimizer_parameter_groups(),
+                **self.optimizer_kwargs)
+        else:
+            self.model.eval()
+
+        return self.run_batches(
+            task, optimizer, train=train, meta_train=meta_train)
+
+    def run_batches(self, batches, optimizer, train=False, meta_train=False):
+        """Iterate over task-specific batches.
+
+        Arguments:
+            batches (torch.utils.data.DataLoader): task-specific dataloaders.
+            optimizer (torch.nn.optim): optimizer instance if training is True.
+            train (bool): whether to train on task.
+            meta_train (bool): whether to meta-train on task.
+        """
+        device = next(self.model.parameters()).device
+        self.model.no_collect()
+        res = Res()
+        N = len(batches)
+        for n, (input, target) in enumerate(batches):
+            inner_input = input.to(device, non_blocking=True)
+            inner_target = target.to(device, non_blocking=True)
+
+            # Evaluate model
+            prediction = self.model(inner_input)
+            loss = self.criterion(prediction, inner_target)
+
+            res.log(loss=loss.item(), pred=prediction, target=inner_target)
+
+            # TRAINING #
+            if not train:
+                continue
+
+            final = (n + 1) == N
+            loss.backward()
+
+            if meta_train:
+                opt = SGD(self.model.optimizer_parameter_groups(tensor=True))
+                opt.zero_grad()
+                outer_input, outer_target = next(iter(batches))
+                l_outer, (l_inner, a1, a2) = step(
+                    criterion=self.criterion,
+                    x_inner=inner_input, x_outer=outer_input,
+                    y_inner=inner_target, y_outer=outer_target,
+                    model=self.model,
+                    optimizer=opt, scorer=None)
+                self.meta_loss = self.meta_loss + l_outer
+                del l_inner, a1, a2
+
+            optimizer.step()
+            optimizer.zero_grad()
+            if final:
+                break
+        res.aggregate()
+        return res
+
+
+class WarpGradWrapper(BaseWrapper):
     """Wrapper around WarpGrad meta-learners.
 
     Arguments:
@@ -242,7 +417,6 @@ class WarpGradWrapper(BaseWrapper):
 
 
 class LeapWrapper(BaseWrapper):
-
     """Wrapper around the Leap meta-learner.
 
     Arguments:
@@ -294,7 +468,6 @@ class LeapWrapper(BaseWrapper):
 
 
 class MAMLWrapper(object):
-
     """Wrapper around the MAML meta-learner.
 
     Arguments:
@@ -358,7 +531,6 @@ class MAMLWrapper(object):
 
 
 class NoWrapper(BaseWrapper):
-
     """Wrapper for baseline without any meta-learning.
 
     Arguments:
@@ -367,6 +539,7 @@ class NoWrapper(BaseWrapper):
         optimizer_kwargs (dict): kwargs to pass to optimizer upon construction.
         criterion (func): loss criterion to use.
     """
+
     def __init__(self, model, optimizer_cls, optimizer_kwargs, criterion):
         super(NoWrapper, self).__init__(criterion,
                                         model,
@@ -390,7 +563,6 @@ class NoWrapper(BaseWrapper):
 
 
 class _FOWrapper(BaseWrapper):
-
     """Base wrapper for First-order MAML and Reptile.
 
     Arguments:
@@ -476,7 +648,6 @@ class _FOWrapper(BaseWrapper):
 
 
 class ReptileWrapper(_FOWrapper):
-
     """Wrapper for Reptile.
 
     Arguments:
@@ -515,7 +686,6 @@ class FOMAMLWrapper(_FOWrapper):
 
 
 class FtWrapper(BaseWrapper):
-
     """Wrapper for Multi-headed finetuning.
 
     This wrapper differs from others in that it blends batches from all tasks

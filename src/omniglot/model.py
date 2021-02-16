@@ -3,7 +3,8 @@ https://github.com/amzn/metalearn-leap
 """
 import torch.nn as nn
 from wrapper import (WarpGradWrapper, LeapWrapper, MAMLWrapper, NoWrapper,
-                      FtWrapper, FOMAMLWrapper, ReptileWrapper)
+                     FtWrapper, FOMAMLWrapper, ReptileWrapper,
+                     WarpGradOnlineWrapper)
 
 NUM_CLASSES = 50
 ACT_FUNS = {
@@ -43,14 +44,25 @@ def get_model(args, criterion):
         print(model)
 
     if "warp" in args.meta_model.lower():
-        return WarpGradWrapper(
-            model,
-            args.inner_opt,
-            args.outer_opt,
-            args.inner_kwargs,
-            args.outer_kwargs,
-            args.meta_kwargs,
-            criterion)
+        # this uses online algorithm wrapper
+        if "online" in args.meta_model.lower():
+            return WarpGradOnlineWrapper(
+                model,
+                args.inner_opt,
+                args.outer_opt,
+                args.inner_kwargs,
+                args.outer_kwargs,
+                args.meta_kwargs,
+                criterion)
+        else:
+            return WarpGradWrapper(
+                model,
+                args.inner_opt,
+                args.outer_opt,
+                args.inner_kwargs,
+                args.outer_kwargs,
+                args.meta_kwargs,
+                criterion)
 
     if args.meta_model.lower() == 'leap':
         return LeapWrapper(
