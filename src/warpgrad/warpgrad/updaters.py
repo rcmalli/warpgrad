@@ -59,7 +59,7 @@ class SimpleUpdater:
         # init_objective = INIT_OBJECTIVES[self.init_objective]
         # init_objective(model.named_init_parameters(suffix=None),
         #                params, self.norm, self.bsz, step_fn)
-
+        pass
 
 class DualUpdater:
     """Implements the WarpGrad meta-objective.
