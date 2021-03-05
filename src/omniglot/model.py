@@ -1,6 +1,7 @@
 """Base Omniglot models. Based on original implementation:
 https://github.com/amzn/metalearn-leap
 """
+import torch
 import torch.nn as nn
 from wrapper import (WarpGradWrapper, LeapWrapper, MAMLWrapper, NoWrapper,
                      FtWrapper, FOMAMLWrapper, ReptileWrapper,
@@ -491,7 +492,6 @@ class WarpedOmniConv(nn.Module):
         """Reset stats for new task"""
         # Reset head if multi-headed, otherwise null-op
         self.head.reset_parameters()
-
         # Reset BN running stats
         for m in self.modules():
             if hasattr(m, 'reset_running_stats'):

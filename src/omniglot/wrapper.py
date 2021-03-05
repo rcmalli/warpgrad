@@ -14,7 +14,7 @@ from leap.utils import clone_state_dict
 
 from utils import Res, AggRes
 from warpgrad import SGD
-from warpgrad.utils import step, backward, unfreeze, freeze
+from warpgrad.utils import step, backward, unfreeze, freeze, copy
 
 
 class BaseWrapper(object):
@@ -236,23 +236,26 @@ class WarpGradOnlineWrapper(BaseWrapper):
         if meta_train:
             # at the end of collection for K steps N tasks we do the backward
             # pass.
-            backward(self.meta_loss, self.model.meta_parameters(
-                include_init=False))
+            meta_parameters = self.model.meta_parameters(include_init=False)
+            unfreeze(meta_parameters)
+            backward(self.meta_loss, meta_parameters)
             self._final_meta_update()
+            freeze(meta_parameters)
 
         return results
 
     def run_task(self, task, train, meta_train):
         """Run model on a given task, first adapting and then evaluating"""
         self.model.no_collect()
-
         optimizer = None
         if train:
             # TODO: Discuss implementation and correct it.
             # This line breakes gradient computation for now
             # meta_layers required_grad properties are set to False if
             # we call init_adaptation
-            # self.model.init_adaptation()
+            copy(self.model.adapt_state(), self.model.init_state())
+            freeze(self.model.meta_parameters())
+            unfreeze(self.model.adapt_parameters())
             self.model.train()
 
             optimizer = self.optimizer_cls(
@@ -295,6 +298,7 @@ class WarpGradOnlineWrapper(BaseWrapper):
             loss.backward()
 
             if meta_train:
+                unfreeze(self.model.meta_parameters())
                 opt = SGD(self.model.optimizer_parameter_groups(tensor=True))
                 opt.zero_grad()
                 outer_input, outer_target = next(iter(batches))
@@ -305,6 +309,7 @@ class WarpGradOnlineWrapper(BaseWrapper):
                     model=self.model,
                     optimizer=opt, scorer=None)
                 self.meta_loss = self.meta_loss + l_outer
+                freeze(self.model.meta_parameters())
                 del l_inner, a1, a2
 
             optimizer.step()
