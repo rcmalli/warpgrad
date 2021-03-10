@@ -9,6 +9,8 @@ import time
 import os
 from os.path import join
 
+import wandb
+
 from data import DataContainer
 
 import torch
@@ -99,6 +101,21 @@ parser.add_argument('--warp_batch_norm', action='store_true',
                     help='Batch norm in warp-layer.')
 parser.add_argument('--warp_final_head', action='store_true',
                     help='Warp final linear layer.')
+
+parser.add_argument('--use_wandb', action='store_true',
+                    help='allows to use wandb')
+
+parser.add_argument('--wandb_project_name', type=str,
+                    help='Weight and Biases project name')
+
+parser.add_argument('--wandb_entity_name', type=str,
+                    help='Weight and Biases project name')
+
+parser.add_argument('--wandb_group', type=str,
+                    default='original',
+                    help='wandb group name')
+
+
 args = parser.parse_args()
 
 args.imsize = (28, 28)
@@ -128,8 +145,27 @@ pp(args)
 torch.manual_seed(args.seed)
 
 
+
+
 def main():
     """Run script"""
+
+    if args.use_wandb:
+        wandb.init(config=args,
+                   project=args.wandb_project_name,
+                   entity=args.wandb_entity_name,
+                   group=args.wandb_group)
+        wandb_log_keys = ['train_loss', 'train_meta_loss', 'train_acc',
+                          'val_loss',
+                          'val_acc', 'val_meta_loss']
+
+        def wandb_log(results, iteration, meta_split):
+            result_dict = results.__dict__
+            result_log = {f"{meta_split}/{k}": v for k, v in result_dict.items()
+                          if
+                          k in wandb_log_keys}
+            result_log.update({'iteration': iteration})
+            wandb.log(result_log)
 
     log_dir = os.path.join(args.log_dir, args.meta_model, args.suffix)
 
@@ -179,6 +215,9 @@ def main():
 
         if args.log_ival > 0:
             log_status(consolidate(results), 'task avg', t)
+            if args.use_wandb:
+                wandb_log(results=consolidate(results), iteration=step,
+                          meta_split="metaval")
 
         if args.write_ival > 0:
             write_val_res(results, step, case, log_dir)
@@ -223,8 +262,10 @@ def main():
                                     args.multi_head)
 
             results = model(task_batch, meta_train=True)
-
             train_step += 1
+            if args.use_wandb:
+                wandb_log(results=results, iteration=train_step,
+                          meta_split='metatrain')
             if train_step % args.write_ival == 0:
                 write_train_res(results, train_step, log_dir)
 
@@ -254,6 +295,8 @@ def main():
         pp("No saved model. Using latest for final evaluation")
 
     evaluate(model, 'test', train_step)
+    if args.use_wandb:
+        wandb.finish()
 
 
 if __name__ == '__main__':
