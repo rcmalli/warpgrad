@@ -18,7 +18,7 @@ TEST = 10
 HOLD_OUT = 5
 
 DEFAULT_TRANSFORM = transforms.Compose([
-    transforms.RandomAffine((0, 360), (0.2, 0.2), (0.8, 1.2)),
+    # transforms.RandomAffine((0, 360), (0.2, 0.2), (0.8, 1.2)),
     transforms.ToTensor(),
 ])
 
