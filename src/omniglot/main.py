@@ -105,10 +105,10 @@ parser.add_argument('--warp_final_head', action='store_true',
 parser.add_argument('--use_wandb', action='store_true',
                     help='allows to use wandb')
 
-parser.add_argument('--wandb_project_name', type=str,
+parser.add_argument('--wandb_project', type=str,
                     help='Weight and Biases project name')
 
-parser.add_argument('--wandb_entity_name', type=str,
+parser.add_argument('--wandb_entity', type=str,
                     help='Weight and Biases project name')
 
 parser.add_argument('--wandb_group', type=str,
@@ -152,8 +152,8 @@ def main():
 
     if args.use_wandb:
         wandb.init(config=args,
-                   project=args.wandb_project_name,
-                   entity=args.wandb_entity_name,
+                   project=args.wandb_project,
+                   entity=args.wandb_entity,
                    group=args.wandb_group)
         wandb_log_keys = ['train_loss', 'train_meta_loss', 'train_acc',
                           'val_loss',

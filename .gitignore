@@ -10,3 +10,4 @@ __pycache__
 .idea/
 src/*/data
 src/*/logs
+src/omniglot/scripts.txt
